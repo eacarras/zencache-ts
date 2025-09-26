@@ -1,0 +1,15 @@
+
+export function approximateSizeOf(value: unknown): number {
+  try {
+    if (typeof value === 'string') return Buffer.byteLength(value, 'utf8');
+    if (typeof value === 'number') return 8; // JS number
+    if (typeof value === 'boolean') return 1;
+    if (value === null || value === undefined) return 0;
+    // Rough JSON size
+    const s = JSON.stringify(value);
+    return Buffer.byteLength(s ?? '', 'utf8');
+  } catch {
+    // Fallback: best effort
+    return 64;
+  }
+}

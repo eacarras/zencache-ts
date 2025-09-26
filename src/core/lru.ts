@@ -1,4 +1,5 @@
 
+/** Doubly-linked list LRU with O(1) operations. */
 export interface LruNode<K=string> {
   key: K;
   prev?: LruNode<K>;

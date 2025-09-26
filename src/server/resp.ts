@@ -4,9 +4,9 @@ import { Cache } from '../core/cache.js';
 import { metrics } from '../utils/metrics.js';
 
 /**
- * Minimal RESP (Redis-like) TCP adapter implementing a tiny subset:
+ * Minimal RESP (Redis-like) TCP adapter:
  * PING, GET, SET key value [PX ms], DEL, EXISTS, TTL, PTTL, QUIT, INFO.
- * Values are treated as strings.
+ * Values are strings.
  */
 export function startRespServer(cache: Cache, port: number) {
   const server = net.createServer((socket) => {
@@ -76,93 +76,62 @@ function handleCommand(cache: Cache, socket: net.Socket, msg: RespVal) {
   }
   const cmd = String(msg[0] ?? '').toUpperCase();
 
-  if (cmd === 'PING') { const __t0 = process.hrtime.bigint(); socket.write(respSimple('PONG')); return; }
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'INFO' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'TTL/PTTL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'EXISTS' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'DEL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'GET' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'PING' });
+  if (cmd === 'PING') { const t0=process.hrtime.bigint(); socket.write(respSimple('PONG')); metrics.respDurations.observe(Number(process.hrtime.bigint()-t0)/1e9, { cmd: 'PING' }); return; }
 
-  if (cmd === 'GET') { const __t0 = process.hrtime.bigint();
+  if (cmd === 'GET') {
+    const t0=process.hrtime.bigint();
     const key = String(msg[1] ?? '');
-    if (!key) { socket.write(respError('ERR wrong number of arguments for GET')); return; }
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'INFO' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'TTL/PTTL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'EXISTS' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'DEL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'GET' });
+    if (!key) { socket.write(respError('ERR wrong number of arguments for GET')); metrics.respDurations.observe(Number(process.hrtime.bigint()-t0)/1e9, { cmd: 'GET' }); return; }
     const v = cache.get<string>(key);
     socket.write(respBulk(v === undefined ? null : String(v)));
-    return;
+    metrics.respDurations.observe(Number(process.hrtime.bigint()-t0)/1e9, { cmd: 'GET' }); return;
   }
 
-  if (cmd === 'SET') { const __t0 = process.hrtime.bigint();
+  if (cmd === 'SET') {
+    const t0=process.hrtime.bigint();
     const key = String(msg[1] ?? '');
     const val = String(msg[2] ?? '');
-    if (!key || (msg.length < 3)) { socket.write(respError('ERR wrong number of arguments for SET')); return; }
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'INFO' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'TTL/PTTL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'EXISTS' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'DEL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'GET' });
+    if (!key || (msg.length < 3)) { socket.write(respError('ERR wrong number of arguments for SET')); metrics.respDurations.observe(Number(process.hrtime.bigint()-t0)/1e9, { cmd: 'SET' }); return; }
     let ttlMs: number | undefined;
     if (typeof msg[3] === 'string' && String(msg[3]).toUpperCase() === 'PX') {
       ttlMs = parseInt(String(msg[4] ?? ''), 10);
       if (!Number.isFinite(ttlMs)) ttlMs = undefined;
     }
-    cache.set<string>(key, val, { ttlMs });
-    socket.write(respSimple('OK')); return;
+    const ok = cache.set<string>(key, val, { ttlMs });
+    if (!ok) { socket.write(respError('ERR admission-rejected')); metrics.respDurations.observe(Number(process.hrtime.bigint()-t0)/1e9, { cmd: 'SET' }); return; }
+    socket.write(respSimple('OK')); metrics.respDurations.observe(Number(process.hrtime.bigint()-t0)/1e9, { cmd: 'SET' }); return;
   }
 
-  if (cmd === 'DEL') { const __t0 = process.hrtime.bigint();
+  if (cmd === 'DEL') {
+    const t0=process.hrtime.bigint();
     const key = String(msg[1] ?? '');
-    if (!key) { socket.write(respError('ERR wrong number of arguments for DEL')); return; }
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'INFO' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'TTL/PTTL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'EXISTS' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'DEL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'GET' });
+    if (!key) { socket.write(respError('ERR wrong number of arguments for DEL')); metrics.respDurations.observe(Number(process.hrtime.bigint()-t0)/1e9, { cmd: 'DEL' }); return; }
     const ok = cache.del(key);
-    socket.write(respInteger(ok ? 1 : 0)); return;
+    socket.write(respInteger(ok ? 1 : 0));
+    metrics.respDurations.observe(Number(process.hrtime.bigint()-t0)/1e9, { cmd: 'DEL' }); return;
   }
 
-  if (cmd === 'EXISTS') { const __t0 = process.hrtime.bigint();
+  if (cmd === 'EXISTS') {
+    const t0=process.hrtime.bigint();
     const key = String(msg[1] ?? '');
-    if (!key) { socket.write(respError('ERR wrong number of arguments for EXISTS')); return; }
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'INFO' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'TTL/PTTL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'EXISTS' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'DEL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'GET' });
-    socket.write(respInteger(cache.has(key) ? 1 : 0)); return;
+    if (!key) { socket.write(respError('ERR wrong number of arguments for EXISTS')); metrics.respDurations.observe(Number(process.hrtime.bigint()-t0)/1e9, { cmd: 'EXISTS' }); return; }
+    socket.write(respInteger(cache.has(key) ? 1 : 0));
+    metrics.respDurations.observe(Number(process.hrtime.bigint()-t0)/1e9, { cmd: 'EXISTS' }); return;
   }
 
-  if (cmd === 'TTL' || cmd === 'PTTL') { const __t0 = process.hrtime.bigint();
+  if (cmd === 'TTL' || cmd === 'PTTL') {
+    const t0=process.hrtime.bigint();
     const key = String(msg[1] ?? '');
-    if (!key) { socket.write(respError('ERR wrong number of arguments')); return; }
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'INFO' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'TTL/PTTL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'EXISTS' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'DEL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'GET' });
-    if (!cache.has(key)) { socket.write(respInteger(-2)); return; }
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'INFO' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'TTL/PTTL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'EXISTS' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'DEL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'GET' });
+    if (!key) { socket.write(respError('ERR wrong number of arguments')); metrics.respDurations.observe(Number(process.hrtime.bigint()-t0)/1e9, { cmd: 'TTL/PTTL' }); return; }
+    if (!cache.has(key)) { socket.write(respInteger(-2)); metrics.respDurations.observe(Number(process.hrtime.bigint()-t0)/1e9, { cmd: 'TTL/PTTL' }); return; }
     const rem = cache.ttlRemainingMs(key);
-    if (rem === undefined) { socket.write(respInteger(-1)); return; }
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'INFO' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'TTL/PTTL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'EXISTS' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'DEL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'GET' });
-    socket.write(respInteger(cmd === 'TTL' ? Math.floor(rem/1000) : rem)); return;
+    if (rem === undefined) { socket.write(respInteger(-1)); metrics.respDurations.observe(Number(process.hrtime.bigint()-t0)/1e9, { cmd: 'TTL/PTTL' }); return; }
+    socket.write(respInteger(cmd === 'TTL' ? Math.floor(rem/1000) : rem));
+    metrics.respDurations.observe(Number(process.hrtime.bigint()-t0)/1e9, { cmd: 'TTL/PTTL' }); return;
   }
 
-  if (cmd === 'INFO') { const __t0 = process.hrtime.bigint();
+  if (cmd === 'INFO') {
+    const t0=process.hrtime.bigint();
     const s = cache.stats();
     const info = [
       '# Server',
@@ -176,15 +145,11 @@ function handleCommand(cache: Cache, socket: net.Socket, msg: RespVal) {
       `capacity_bytes:${s.capacityBytes}`,
       `lfu_enabled:${s.lfuEnabled ? 1 : 0}`,
     ].join('\r\n');
-    socket.write(respBulk(info)); return;
+    socket.write(respBulk(info));
+    metrics.respDurations.observe(Number(process.hrtime.bigint()-t0)/1e9, { cmd: 'INFO' }); return;
   }
 
-  if (cmd === 'QUIT') { socket.end(respSimple('OK')); return; }
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'INFO' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'TTL/PTTL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'EXISTS' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'DEL' });
-    metrics.respDurations.observe(Number(process.hrtime.bigint() - __t0)/1e9, { cmd: 'GET' });
+  if (cmd === 'QUIT') { const t0=process.hrtime.bigint(); socket.end(respSimple('OK')); metrics.respDurations.observe(Number(process.hrtime.bigint()-t0)/1e9, { cmd: 'QUIT' }); return; }
 
   socket.write(respError('ERR unknown command'));
 }

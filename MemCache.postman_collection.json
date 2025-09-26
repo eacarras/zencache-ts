@@ -1,0 +1,104 @@
+{
+	"info": {
+		"_postman_id": "4779faeb-092a-43d7-9d36-8e938226b886",
+		"name": "MemCache",
+		"schema": "https://schema.getpostman.com/json/collection/v2.0.0/collection.json",
+		"_exporter_id": "9604466"
+	},
+	"item": [
+		{
+			"name": "Statitics",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": "http://localhost:8080/v1/stats"
+			},
+			"response": []
+		},
+		{
+			"name": "Set Cache Value",
+			"request": {
+				"method": "PUT",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"value\": \"world\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": {
+					"raw": "http://localhost:8080/v1/cache/hello?ttl=2000&content-type=application/json",
+					"protocol": "http",
+					"host": [
+						"localhost"
+					],
+					"port": "8080",
+					"path": [
+						"v1",
+						"cache",
+						"hello"
+					],
+					"query": [
+						{
+							"key": "ttl",
+							"value": "2000"
+						},
+						{
+							"key": "content-type",
+							"value": "application/json"
+						}
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Set Cache Value Copy",
+			"request": {
+				"method": "DELETE",
+				"header": [],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n    \"value\": \"world\"\n}",
+					"options": {
+						"raw": {
+							"language": "json"
+						}
+					}
+				},
+				"url": "http://localhost:8080/v1/cache/hello"
+			},
+			"response": []
+		},
+		{
+			"name": "Health Endpoint",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": "http://localhost:8080/health"
+			},
+			"response": []
+		},
+		{
+			"name": "Get Information",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": "http://localhost:8080/v1/cache/hello"
+			},
+			"response": []
+		},
+		{
+			"name": "Metrics",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": "http://localhost:8080/metrics"
+			},
+			"response": []
+		}
+	]
+}

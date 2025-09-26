@@ -27,7 +27,7 @@ export interface SetOptions {
 
 export interface Cache {
   get<T = unknown>(key: string): T | undefined;
-  set<T = unknown>(key: string, value: T, opts?: SetOptions): void;
+  set<T = unknown>(key: string, value: T, opts?: SetOptions): boolean;
   del(key: string): boolean;
   has(key: string): boolean;
   clear(): void;
@@ -99,7 +99,7 @@ export class CacheCore implements Cache {
     return true;
   }
 
-  set<T = unknown>(key: string, value: T, opts?: SetOptions): void {
+  set<T = unknown>(key: string, value: T, opts?: SetOptions): boolean {
     const existing = this.map.get(key);
     const size = opts?.sizeOverrideBytes ?? approximateSizeOf(value);
     const expiresAt = opts?.ttlMs ? (this.now() + opts.ttlMs) : undefined;
@@ -114,7 +114,7 @@ export class CacheCore implements Cache {
       this.updateTtl(existing, expiresAt);
       this.lfu?.increment(key);
       this.enforceCapacity();
-      return;
+      return true;
     }
 
     if (this.lfu && (this._totalSize + size) > this.capacity) {
@@ -122,7 +122,7 @@ export class CacheCore implements Cache {
       if (victimKey) {
         const cand = this.lfu.estimate(key);
         const vict = this.lfu.estimate(victimKey);
-        if (cand < vict) { this.lfu.increment(key); return; }
+        if (cand < vict) { this.lfu.increment(key); return false; }
       }
     }
 
@@ -133,6 +133,7 @@ export class CacheCore implements Cache {
     this.addTtl(entry, expiresAt);
     this.lfu?.increment(key);
     this.enforceCapacity();
+    return true;
   }
 
   del(key: string): boolean {

@@ -1,6 +1,7 @@
 
 /**
- * TinyLFU-style frequency estimator using a Count-Min Sketch (CMS) with aging.
+ * TinyLFU con Count-Min Sketch (4x2048) y aging por halving periódico.
+ * Estimador probabilístico para decisiones de admisión.
  */
 export class TinyLFU {
   private readonly d = 4;

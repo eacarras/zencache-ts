@@ -1,9 +1,8 @@
 
 /**
  * Tiny Prometheus-style metrics registry with labeled histograms.
- * No deps; minimal implementation.
+ * No external deps; minimal and fast.
  */
-
 type Labels = Record<string, string>;
 
 function labelsKey(labels: Labels): string {
@@ -19,17 +18,15 @@ export class LabeledHistogram {
   private readonly buckets: number[];
   private readonly name: string;
   private readonly help: string;
-  // series key -> { counts per bucket + +Inf, sum, count, labels }
   private readonly series = new Map<string, { counts: number[]; sum: number; count: number; labels: Labels }>();
 
   constructor(name: string, help: string, buckets?: number[]) {
     this.name = name;
     this.help = help;
-    // Default Prometheus buckets (seconds), slightly dense at low end
     this.buckets = buckets ?? [0.0005,0.001,0.0025,0.005,0.01,0.025,0.05,0.1,0.25,0.5,1,2.5,5];
   }
 
-  observe(value: number, labels: Labels = {}) {
+  observe(valueSeconds: number, labels: Labels = {}) {
     const key = labelsKey(labels);
     let s = this.series.get(key);
     if (!s) {
@@ -37,9 +34,9 @@ export class LabeledHistogram {
       this.series.set(key, s);
     }
     let i = 0;
-    while (i < this.buckets.length && value > this.buckets[i]) i++;
+    while (i < this.buckets.length && valueSeconds > this.buckets[i]) i++;
     s.counts[i]++;
-    s.sum += value;
+    s.sum += valueSeconds;
     s.count++;
   }
 
@@ -48,14 +45,12 @@ export class LabeledHistogram {
     out += `# HELP ${this.name} ${this.help}\n`;
     out += `# TYPE ${this.name} histogram\n`;
     for (const { counts, sum, count, labels } of this.series.values()) {
-      // cumulative
       let cum = 0;
       for (let i = 0; i < this.buckets.length; i++) {
         cum += counts[i];
-        const le = this.buckets[i];
-        out += `${this.name}_bucket${renderLabels({ ...labels, le: String(le) })} ${cum}\n`;
+        out += `${this.name}_bucket${renderLabels({ ...labels, le: String(this.buckets[i]) })} ${cum}\n`;
       }
-      cum += counts[this.buckets.length]; // +Inf bucket
+      cum += counts[this.buckets.length];
       out += `${this.name}_bucket${renderLabels({ ...labels, le: '+Inf' })} ${cum}\n`;
       out += `${this.name}_sum${renderLabels(labels)} ${sum}\n`;
       out += `${this.name}_count${renderLabels(labels)} ${count}\n`;
@@ -65,6 +60,6 @@ export class LabeledHistogram {
 }
 
 export const metrics = {
-  httpDurations: new LabeledHistogram('zencache_http_seconds', 'HTTP request duration in seconds', undefined),
-  respDurations: new LabeledHistogram('zencache_resp_seconds', 'RESP command duration in seconds', undefined),
+  httpDurations: new LabeledHistogram('zencache_http_seconds', 'HTTP request duration in seconds'),
+  respDurations: new LabeledHistogram('zencache_resp_seconds', 'RESP command duration in seconds'),
 };

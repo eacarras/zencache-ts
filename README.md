@@ -1,7 +1,7 @@
 
 # zencache-ts
 
-A minimal, production-minded in-memory caching service in **TypeScript** with **LRU** eviction, **TTL** expiration **and optional TinyLFU admission**, exposed via a tiny **HTTP API** (no runtime deps) and a minimal **RESP (Redis-like) TCP adapter**. Internals first; API second—on purpose.
+A production-minded **in-memory cache** in **TypeScript** with **LRU eviction**, **TTL expiration**, optional **TinyLFU admission**, tiny **HTTP API**, and a minimal **RESP (Redis-like) adapter**. It also exposes **Prometheus metrics** including **histograms per operation**.
 
 ---
 
@@ -10,10 +10,10 @@ A minimal, production-minded in-memory caching service in **TypeScript** with **
 ```bash
 # Node 22+
 npm i
-npm run dev   # starts HTTP :8080 and RESP :6380 by default
-# In another terminal:
-curl -X PUT 'http://localhost:8080/v1/cache/hello?ttl=2000' -H 'content-type: application/json' -d '{"value":"world"}' -i
-curl 'http://localhost:8080/v1/cache/hello'
+npm run dev   # HTTP :8080, RESP :6380 (LFU OFF por defecto)
+# Put & get
+curl -i -X PUT 'http://localhost:8080/v1/cache/hello' -H 'content-type: application/json' -d '{"value":"world"}'
+curl -i 'http://localhost:8080/v1/cache/hello'
 ```
 
 Build & run:
@@ -26,7 +26,7 @@ Run tests:
 npm test
 ```
 
-Micro-benchmark (very rough, single process/dev only):
+Micro-benchmark (muy simple, 1 proceso):
 ```bash
 npm run bench
 ```
@@ -36,107 +36,47 @@ npm run bench
 ## HTTP API & Metrics
 
 - `PUT /v1/cache/:key?ttl=ms`
-  - Body: JSON `{ "value": any }` or raw text.
-  - Headers: `content-type: application/json` for JSON, otherwise treated as string.
-  - **201 Created** si la clave no existía (con `Location`), **204 No Content** si se actualiza.
-- `GET /v1/cache/:key`
-  - 200 con el valor serializado. Headers: `X-TTL-Remaining` si aplica.
-- `DELETE /v1/cache/:key`
-  - 204 si se eliminó, 404 si no existe.
-- `GET /v1/stats`
-  - Contadores y metadatos.
-- `GET /metrics`
-  - Exposición **Prometheus** (OpenMetrics).
+  - Body: JSON `{ "value": any }` o texto plano (según `content-type`).
+  - **201 Created** si no existía (con `Location`, `X-Cache-Admitted: true`).
+  - **204 No Content** si se actualiza (`X-Cache-Admitted: true`).
+  - **507 Insufficient Storage** si la admisión TinyLFU rechaza la inserción (`X-Cache-Admitted: false` y body `{"ok":false,"admitted":false,"reason":"admission-rejected"}`).
+- `GET /v1/cache/:key` → 200 con valor. Header: `X-TTL-Remaining` si aplica.
+- `DELETE /v1/cache/:key` → 204 si existía, 404 si no.
+- `GET /v1/stats` → snapshot de contadores.
+- `GET /metrics` → Prometheus/OpenMetrics: counters, gauges **y histogramas**:
+  - `zencache_hits_total`, `zencache_misses_total`, `zencache_evictions_total`
+  - `zencache_items`, `zencache_size_bytes`, `zencache_capacity_bytes`, `zencache_started_at_seconds`, `zencache_lfu_enabled`
+  - `zencache_http_seconds{op="GET|PUT|DELETE"}` (histogram)
+  - `zencache_resp_seconds{cmd="GET|SET|DEL|EXISTS|TTL/PTTL|PING|INFO"}` (histogram)
+
+### Scrape config (ejemplo)
+```yaml
+scrape_configs:
+  - job_name: 'zencache'
+    static_configs:
+      - targets: ['localhost:8080']
+    metrics_path: /metrics
+```
 
 ---
 
 ## RESP (Redis-like) TCP Adapter
 
-- Puerto: `6380` (configurable vía `RESP_PORT`).  
-- Comandos: `PING`, `GET key`, `SET key value [PX ms]`, `DEL key`, `EXISTS key`, `TTL key`, `PTTL key`, `QUIT`, `INFO`.  
-- Nota: el adaptador RESP maneja **strings**. Para JSON/binario, usa el API HTTP.
-
----
-
-## Design highlights
-
-- **Core**
-  - Storage: `Map<string, Entry>`
-  - Eviction: **LRU** (doubly-linked list + hashmap) → O(1).
-  - TTL: **min-heap** con sweeper centralizado → O(log n) para expiraciones.
-  - Capacity: por **bytes** aproximados.
-  - **TinyLFU** (opcional): política de admisión para mejorar el hit-ratio bajo churn.
-
-- **Boundaries limpias**
-  - `CacheCore` no conoce HTTP/RESP. Adaptadores son capas delgadas.
-
-- **Tradeoffs**
-  - Modelo single-thread de Node; para multi-core: varios workers detrás de un router.
-  - Serialización simple (HTTP): JSON o texto. RESP: strings.
-
----
-
-## Configuración
-
-Env vars:
-- `PORT` (default `8080`)
-- `RESP_PORT` (default `6380`)
-- `CAPACITY_BYTES` (default `134217728` = 128 MiB)
-- `SWEEP_INTERVAL_MS` (default `100`)
-- `ENABLE_LFU` (default `1`)
-- `ENABLE_RESP` (default `1`)
-
----
-
-## Docker
-
-```bash
-docker build -t zencache-ts .
-docker run --rm -p 8080:8080 -p 6380:6380 -e CAPACITY_BYTES=268435456 zencache-ts
-```
-
----
-
-## Project layout
-
-```
-src/
-  core/
-    cache.ts           # CacheCore (LRU + TTL + TinyLFU admission opcional)
-    lru.ts             # LRU: lista doblemente enlazada
-    ttlheap.ts         # Min-heap por expiresAt
-    sizeof.ts          # Estimador de bytes
-    tinylfu.ts         # Count-Min Sketch + aging
-  server/
-    http.ts            # HTTP API (incluye /metrics)
-    resp.ts            # Adaptador RESP mínimo
-  main.ts              # Bootstrap (env, puertos, flags)
-scripts/
-  bench.ts             # Micro benchmark
-tests/
-  cache.test.ts        # Pruebas básicas
-```
-
----
-
-## Ideas para extender
-
-- TinyLFU window (W-TinyLFU) / segmented LRU.
-- Snapshot/AOF + backpressure.
-- `/metrics` con histogramas por operación.
-- Sharding y réplica (hash consistente).
-- Adaptador RESP más compatible (pipelining robusto).
+- Puerto: `6380` (`RESP_PORT`).
+- Comandos: `PING | GET key | SET key value [PX ms] | DEL key | EXISTS key | TTL key | PTTL key | QUIT | INFO`.
+- Strings only (para JSON/binario, usa HTTP).
+- Si TinyLFU rechaza, `SET` responde `-ERR admission-rejected`.
 
 ---
 
 ## Why this cache?
-- **Deterministic internals**: LRU O(1) + TTL O(log n) con *single sweeper*.
-- **Admisión TinyLFU** opcional → mejor hit-ratio en workloads con churn.
-- **Byte capacity** realista, no solo conteo de items.
-- **Transport-agnostic core** + **HTTP** y **RESP** delgados.
-- **Observabilidad** lista: `/metrics` (counters + **histogramas por operación**).
+- **Deterministic internals**: LRU O(1) + TTL vía min-heap O(log n) con *single sweeper*.
+- **TinyLFU (opcional)**: mejor hit-ratio con cargas con churn (admisión probabilística).
+- **Capacidad por bytes** (aprox), más realista.
+- **Core agnóstico de transporte** + adaptadores delgados (HTTP/RESP).
+- **Observabilidad lista**: counters/gauges + **histogramas**.
 
-### ASCII map (arquitectura)
+### Arquitectura (ASCII)
 ```
 +-----------------------+
 |       HTTP API        |---- GET/PUT/DEL --> Core
@@ -148,42 +88,55 @@ tests/
 +--------------------------------------+
 |            CacheCore                 |
 |  Map<Key,Entry> + LRU + TTL Heap     |
-|  + TinyLFU (admission)               |
+|  + TinyLFU (admission opcional)      |
 +--------------------------------------+
 ```
 
-### Métricas (Prometheus)
-Ejemplo de salida:
-```
-# HELP zencache_http_seconds HTTP request duration in seconds
-# TYPE zencache_http_seconds histogram
-zencache_http_seconds_bucket{op="GET",le="0.005"} 4
-...
-zencache_http_seconds_bucket{op="GET",le="+Inf"} 4
-zencache_http_seconds_sum{op="GET"} 0.0032
-zencache_http_seconds_count{op="GET"} 4
-# HELP zencache_resp_seconds RESP command duration in seconds
-# TYPE zencache_resp_seconds histogram
-zencache_resp_seconds_bucket{cmd="SET",le="0.005"} 10
-...
-```
-Scrape config de ejemplo:
-```yaml
-scrape_configs:
-  - job_name: 'zencache'
-    static_configs:
-      - targets: ['localhost:8080']
-    metrics_path: /metrics
-```
+---
+
+## Configuración (env vars)
+
+- `PORT` (default `8080`)
+- `RESP_PORT` (default `6380`)
+- `CAPACITY_BYTES` (default `134217728` = 128 MiB)
+- `SWEEP_INTERVAL_MS` (default `100`)
+- `ENABLE_LFU` (default `0`)
+- `ENABLE_RESP` (default `1`)
 
 ### RUN con .env
 ```bash
 cp .env.example .env
-# (opcional editar)
 npm run dev
 ```
 
-### Bench rápido
-```bash
-npm run bench
+---
+
+## Project layout
 ```
+src/
+  core/
+    cache.ts           # LRU + TTL + TinyLFU (admisión)
+    lru.ts             # LRU: doubly-linked list
+    ttlheap.ts         # Min-heap por expiresAt
+    sizeof.ts          # Estimador de bytes
+    tinylfu.ts         # Count-Min Sketch + aging
+  server/
+    http.ts            # HTTP API + /metrics
+    resp.ts            # RESP adapter
+  utils/
+    metrics.ts         # Histograms (Prometheus-style)
+  main.ts              # Bootstrap
+scripts/
+  bench.ts
+tests/
+  cache.test.ts
+```
+
+---
+
+## Ideas para extender
+- W-TinyLFU / LRU segmentado.
+- AOF/Snapshot + backpressure.
+- Histogramas por operación *y* por tamaño/resultado (labels extra).
+- Pipelining RESP robusto, MGET/MSET, EX/NX flags…
+- Sharding/replicación (hash consistente).

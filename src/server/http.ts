@@ -12,8 +12,7 @@ export function startHttpServer(cache: Cache, port: number) {
 
       if (url.pathname === '/health') {
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ ok: true })); metrics.httpDurations.observe(Number(process.hrtime.bigint() - t0) / 1e9, { op: 'GET' });
-          return;
+        res.end(JSON.stringify({ ok: true })); return;
       }
 
       if (url.pathname === '/v1/stats') {
@@ -23,9 +22,7 @@ export function startHttpServer(cache: Cache, port: number) {
 
       if (url.pathname === '/metrics') {
         const s = cache.stats();
-        const hist = metrics.httpDurations.export() + metrics.respDurations.export();
-        const s = cache.stats();
-        const body =
+        const counters =
 `# HELP zencache_hits_total Total cache hits
 # TYPE zencache_hits_total counter
 zencache_hits_total ${s.hits}
@@ -54,8 +51,9 @@ zencache_lfu_enabled ${s.lfuEnabled ? 1 : 0}
 # TYPE zencache_up gauge
 zencache_up 1
 `;
+        const hist = metrics.httpDurations.export() + metrics.respDurations.export();
         res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
-        res.end(body + hist); return;
+        res.end(counters + hist); return;
       }
 
       // /v1/cache/:key
@@ -66,12 +64,13 @@ zencache_up 1
         if (method === 'GET') {
           const t0 = process.hrtime.bigint();
           const v = cache.get(key);
-          if (v === undefined) { res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: 'not found' })); return; }
+          if (v === undefined) { res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: 'not found' })); metrics.httpDurations.observe(Number(process.hrtime.bigint() - t0)/1e9, { op: 'GET' }); return; }
           const rem = cache.ttlRemainingMs(key);
           if (rem !== undefined) res.setHeader('X-TTL-Remaining', String(rem));
           res.setHeader('X-Cache-Hit', 'true');
           res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
           res.end(JSON.stringify(v));
+          metrics.httpDurations.observe(Number(process.hrtime.bigint() - t0)/1e9, { op: 'GET' });
           return;
         }
 
@@ -90,21 +89,32 @@ zencache_up 1
           }
 
           const existed = cache.has(key);
-          cache.set(key, value, { ttlMs: ttl });
+          const admitted = cache.set(key, value, { ttlMs: ttl });
+
+          if (!admitted) {
+            res.writeHead(507, { 'content-type': 'application/json; charset=utf-8', 'X-Cache-Admitted': 'false' });
+            res.end(JSON.stringify({ ok: false, admitted: false, reason: 'admission-rejected' }));
+            metrics.httpDurations.observe(Number(process.hrtime.bigint() - t0)/1e9, { op: 'PUT' });
+            return;
+          }
 
           if (!existed) {
-            res.writeHead(201, { 'Location': `/v1/cache/${encodeURIComponent(key)}` });
+            res.writeHead(201, { 'Location': `/v1/cache/${encodeURIComponent(key)}`, 'X-Cache-Admitted': 'true' });
           } else {
-            res.writeHead(204);
+            res.writeHead(204, { 'X-Cache-Admitted': 'true' });
           }
-          res.end(); metrics.httpDurations.observe(Number(process.hrtime.bigint() - t0) / 1e9, { op: 'PUT' }); return;
+          res.end();
+          metrics.httpDurations.observe(Number(process.hrtime.bigint() - t0)/1e9, { op: 'PUT' });
+          return;
         }
 
         if (method === 'DELETE') {
           const t0 = process.hrtime.bigint();
           const ok = cache.del(key);
-          if (!ok) { res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: 'not found' })); return; }
-          res.writeHead(204); res.end(); metrics.httpDurations.observe(Number(process.hrtime.bigint() - t0) / 1e9, { op: 'PUT' }); return;
+          if (!ok) { res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: 'not found' })); metrics.httpDurations.observe(Number(process.hrtime.bigint() - t0)/1e9, { op: 'DELETE' }); return; }
+          res.writeHead(204); res.end();
+          metrics.httpDurations.observe(Number(process.hrtime.bigint() - t0)/1e9, { op: 'DELETE' });
+          return;
         }
       }
 

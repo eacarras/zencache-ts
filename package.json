@@ -1,7 +1,7 @@
 {
   "name": "zencache-ts",
-  "version": "0.2.0",
-  "description": "A minimal, production-minded in-memory caching service in TypeScript with LRU+TTL and optional TinyLFU, HTTP + RESP adapters.",
+  "version": "0.4.0",
+  "description": "In-memory caching service in TypeScript with LRU+TTL and optional TinyLFU, HTTP + RESP adapters, Prometheus metrics.",
   "private": false,
   "type": "module",
   "scripts": {

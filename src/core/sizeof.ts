@@ -1,4 +1,5 @@
-/** Roughly estimate the byte size of a JS value for capacity accounting. */
+
+/** Estima bytes de un valor para contabilidad de capacidad. */
 export function approximateSizeOf(value: unknown): number {
   try {
     if (typeof value === 'string') return Buffer.byteLength(value, 'utf8');

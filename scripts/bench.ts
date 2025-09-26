@@ -4,7 +4,7 @@ import { CacheCore } from '../src/core/cache.js';
 function hrMs([s, ns]: [number, number]) { return s * 1000 + ns / 1e6; }
 
 const N = 200_000;
-const cache = new CacheCore({ capacityBytes: 512 * 1024 * 1024 });
+const cache = new CacheCore({ capacityBytes: 512 * 1024 * 1024, enableTinyLFU: true });
 
 const start = process.hrtime();
 for (let i = 0; i < N; i++) cache.set('k' + i, i);

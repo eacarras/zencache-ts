@@ -8,6 +8,7 @@ export interface CacheStats {
   capacityBytes: number;
   policy: string;
   startedAt: number;
+  lfuEnabled: boolean;
 }
 
 export type Primitive = string | number | boolean | null;
@@ -16,11 +17,12 @@ export type Storable = Primitive | object;
 export interface CacheOptions {
   capacityBytes: number;
   sweepIntervalMs?: number;
+  enableTinyLFU?: boolean;
 }
 
 export interface SetOptions {
   ttlMs?: number;
-  sizeOverrideBytes?: number; // if caller knows exact cost
+  sizeOverrideBytes?: number;
 }
 
 export interface Cache {
@@ -31,20 +33,21 @@ export interface Cache {
   clear(): void;
   stats(): CacheStats;
   ttlRemainingMs(key: string): number | undefined;
-  stop(): void; // stop sweeper
+  stop(): void;
 }
 
 import { DoublyLinkedLRU, LruNode } from './lru.js';
 import { TTLMinHeap } from './ttlheap.js';
 import { approximateSizeOf } from './sizeof.js';
+import { TinyLFU } from './tinylfu.js';
 
 type Entry<T = unknown> = {
   key: string;
   value: T;
-  size: number;            // bytes
-  expiresAt?: number;      // epoch ms
+  size: number;
+  expiresAt?: number;
   lruNode: LruNode<string>;
-  heapIndex?: number;      // index in TTL heap, if present
+  heapIndex?: number;
 };
 
 export class CacheCore implements Cache {
@@ -59,16 +62,16 @@ export class CacheCore implements Cache {
   private readonly startedAt = Date.now();
   private sweeper?: NodeJS.Timeout;
   private readonly sweepInterval: number;
+  private readonly lfu?: TinyLFU;
 
   constructor(opts: CacheOptions) {
     this.capacity = opts.capacityBytes;
     this.sweepInterval = opts.sweepIntervalMs ?? 100;
     this.sweeper = setInterval(() => this.sweepExpired(), this.sweepInterval).unref?.();
+    this.lfu = opts.enableTinyLFU ? new TinyLFU() : undefined;
   }
 
-  stop(): void {
-    if (this.sweeper) clearInterval(this.sweeper);
-  }
+  stop(): void { if (this.sweeper) clearInterval(this.sweeper); }
 
   private now(): number { return Date.now(); }
 
@@ -77,11 +80,12 @@ export class CacheCore implements Cache {
     if (!e) { this._misses++; return undefined; }
     if (e.expiresAt !== undefined && e.expiresAt <= this.now()) {
       this._misses++;
-      this.deleteEntry(e, /*expired*/ true);
+      this.deleteEntry(e, true);
       return undefined;
     }
     this.lru.moveToFront(e.lruNode);
     this._hits++;
+    this.lfu?.increment(key);
     return e.value as T;
   }
 
@@ -89,7 +93,7 @@ export class CacheCore implements Cache {
     const e = this.map.get(key);
     if (!e) return false;
     if (e.expiresAt !== undefined && e.expiresAt <= this.now()) {
-      this.deleteEntry(e, /*expired*/ true);
+      this.deleteEntry(e, true);
       return false;
     }
     return true;
@@ -101,7 +105,6 @@ export class CacheCore implements Cache {
     const expiresAt = opts?.ttlMs ? (this.now() + opts.ttlMs) : undefined;
 
     if (existing) {
-      // adjust size accounting
       this._totalSize -= existing.size;
       existing.value = value;
       existing.size = size;
@@ -109,21 +112,33 @@ export class CacheCore implements Cache {
       this._totalSize += size;
       this.lru.moveToFront(existing.lruNode);
       this.updateTtl(existing, expiresAt);
-    } else {
-      const node = this.lru.insertFront(key);
-      const entry: Entry<T> = { key, value, size, expiresAt, lruNode: node };
-      this.map.set(key, entry);
-      this._totalSize += size;
-      this.addTtl(entry, expiresAt);
+      this.lfu?.increment(key);
+      this.enforceCapacity();
+      return;
     }
 
+    if (this.lfu && (this._totalSize + size) > this.capacity) {
+      const victimKey = this.lru.peekTailKey();
+      if (victimKey) {
+        const cand = this.lfu.estimate(key);
+        const vict = this.lfu.estimate(victimKey);
+        if (cand < vict) { this.lfu.increment(key); return; }
+      }
+    }
+
+    const node = this.lru.insertFront(key);
+    const entry: Entry<T> = { key, value, size, expiresAt, lruNode: node };
+    this.map.set(key, entry);
+    this._totalSize += size;
+    this.addTtl(entry, expiresAt);
+    this.lfu?.increment(key);
     this.enforceCapacity();
   }
 
   del(key: string): boolean {
     const e = this.map.get(key);
     if (!e) return false;
-    this.deleteEntry(e, /*expired*/ false);
+    this.deleteEntry(e, false);
     return true;
   }
 
@@ -151,10 +166,9 @@ export class CacheCore implements Cache {
       capacityBytes: this.capacity,
       policy: 'LRU',
       startedAt: this.startedAt,
+      lfuEnabled: !!this.lfu,
     };
   }
-
-  // --- internals ---
 
   private enforceCapacity(): void {
     while (this._totalSize > this.capacity) {
@@ -162,7 +176,7 @@ export class CacheCore implements Cache {
       if (!tail) break;
       const e = this.map.get(tail.key);
       if (!e) continue;
-      this.deleteEntry(e, /*expired*/ false);
+      this.deleteEntry(e, false);
       this._evictions++;
     }
   }
@@ -173,7 +187,6 @@ export class CacheCore implements Cache {
   }
 
   private updateTtl(e: Entry, expiresAt?: number) {
-    // remove old if present, then add new if any
     if (e.heapIndex !== undefined) {
       this.ttl.removeAt(e.heapIndex);
       e.heapIndex = undefined;
@@ -190,7 +203,7 @@ export class CacheCore implements Cache {
       const e = this.map.get(key);
       if (!e) continue;
       if (e.expiresAt !== undefined && e.expiresAt <= now) {
-        this.deleteEntry(e, /*expired*/ true);
+        this.deleteEntry(e, true);
       }
     }
   }
@@ -198,9 +211,7 @@ export class CacheCore implements Cache {
   private deleteEntry(e: Entry, _expired: boolean): void {
     this.map.delete(e.key);
     this.lru.removeNode(e.lruNode);
-    if (e.heapIndex !== undefined) {
-      this.ttl.removeAt(e.heapIndex);
-    }
+    if (e.heapIndex !== undefined) this.ttl.removeAt(e.heapIndex);
     this._totalSize -= e.size;
   }
 }

@@ -33,7 +33,7 @@ export class DoublyLinkedLRU<K=string> {
     if (this._head) this._head.prev = node;
     this._head = node;
     if (!this._tail) this._tail = node;
-    this._size++; // removeNode decremented size; re-increment
+    this._size++;
   }
 
   popTail(): LruNode<K> | undefined {
@@ -41,6 +41,10 @@ export class DoublyLinkedLRU<K=string> {
     const node = this._tail;
     this.removeNode(node);
     return node;
+  }
+
+  peekTailKey(): K | undefined {
+    return this._tail?.key;
   }
 
   removeNode(node: LruNode<K>): void {

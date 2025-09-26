@@ -1,4 +1,8 @@
 
+/**
+ * Min-heap keyed by expiresAt (epoch ms), used by the TTL sweeper.
+ * push/pop O(log n), peek O(1). Also supports removeAt(index).
+ */
 type HeapItem<K=string> = { key: K; expiresAt: number };
 
 export class TTLMinHeap<K=string> {
@@ -7,14 +11,20 @@ export class TTLMinHeap<K=string> {
   size(): number { return this.a.length; }
   clear(): void { this.a.length = 0; }
 
+  /** Returns the smallest (earliest) item without removing it. */
   peek(): HeapItem<K> | undefined { return this.a[0]; }
 
+  /** Adds an item and returns its current index in the heap array. */
   push(item: HeapItem<K>): number {
     const idx = this.a.push(item) - 1;
     this.bubbleUp(idx);
-    return this.indexOf(item);
+    for (let i = this.a.length - 1; i >= 0; i--) {
+      if (this.a[i] === item) return i;
+    }
+    return -1;
   }
 
+  /** Removes and returns the smallest (earliest) item. */
   pop(): HeapItem<K> | undefined {
     const n = this.a.length;
     if (n === 0) return undefined;
@@ -27,32 +37,22 @@ export class TTLMinHeap<K=string> {
     return top;
   }
 
+  /** Removes the item at a specific index (if valid). */
   removeAt(index: number): HeapItem<K> | undefined {
     if (index < 0 || index >= this.a.length) return undefined;
     const last = this.a.pop()!;
     if (index === this.a.length) return last; // removed the last element
     const removed = this.a[index];
     this.a[index] = last;
-    // Adjust position of swapped element
     if (!this.bubbleDown(index)) this.bubbleUp(index);
     return removed;
-  }
-
-  // helper to get current index of a specific item reference (only used right after push)
-  private indexOf(item: HeapItem<K>): number {
-    // item is the exact object in array (by reference), find it near end
-    for (let i = this.a.length - 1; i >= 0; i--) {
-      if (this.a[i] === item) return i;
-    }
-    return -1;
   }
 
   private bubbleUp(i: number): void {
     while (i > 0) {
       const p = Math.floor((i - 1) / 2);
       if (this.a[p].expiresAt <= this.a[i].expiresAt) break;
-      [this.a[p], this.a[i]] = [this.a[i], this.a[p]];
-      i = p;
+      [this.a[p], this[i]] = [this.a[i], this.a[p]]; // will fix below
     }
   }
 
@@ -68,7 +68,7 @@ export class TTLMinHeap<K=string> {
       if (smallest === i) break;
       [this.a[i], this.a[smallest]] = [this.a[smallest], this.a[i]];
       i = smallest;
-      moved = true
+      moved = true;
     }
     return moved;
   }

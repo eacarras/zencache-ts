@@ -12,11 +12,10 @@ describe('CacheCore basic', () => {
   });
 
   it('evicts LRU on capacity', () => {
-    const c = new CacheCore({ capacityBytes: 24 }); // enough for ~3 small numbers (8 bytes each)
+    const c = new CacheCore({ capacityBytes: 24 });
     c.set('a', 1);
     c.set('b', 2);
     c.set('c', 3);
-    // Next insert should evict least recently used ('a')
     c.set('d', 4);
     expect(c.get('a')).toBeUndefined();
     expect(c.has('b')).toBe(true);

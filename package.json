@@ -1,18 +1,19 @@
 {
   "name": "zencache-ts",
-  "version": "0.1.0",
-  "description": "A minimal, production-minded in-memory caching service in TypeScript with LRU eviction and TTL expiration.",
+  "version": "0.2.0",
+  "description": "A minimal, production-minded in-memory caching service in TypeScript with LRU+TTL and optional TinyLFU, HTTP + RESP adapters.",
   "private": false,
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/main.ts",
+    "dev:resp": "PORT=8080 RESP_PORT=6380 tsx watch src/main.ts",
     "start": "node dist/main.js",
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "bench": "tsx scripts/bench.ts"
   },
   "engines": {
-    "node": ">=18.17"
+    "node": ">=22"
   },
   "devDependencies": {
     "tsx": "^4.19.2",

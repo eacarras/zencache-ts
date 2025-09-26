@@ -1,22 +1,19 @@
 
 # zencache-ts
 
-A minimal, production‑minded in‑memory caching service in **TypeScript** with **LRU** eviction and **TTL** expiration, exposed via a tiny HTTP API (no runtime deps). Internals first; API second—on purpose.
-
-> Focus areas: deterministic O(1) ops for LRU, centralized TTL min-heap sweeper, byte-based capacity, clean separation between **core cache** and **transport**.
+A minimal, production-minded in-memory caching service in **TypeScript** with **LRU** eviction, **TTL** expiration **and optional TinyLFU admission**, exposed via a tiny **HTTP API** (no runtime deps) and a minimal **RESP (Redis-like) TCP adapter**. Internals first; API second—on purpose.
 
 ---
 
 ## Quick start
 
 ```bash
-# Node 18+
+# Node 22+
 npm i
-npm run dev   # starts on :8080 by default
+npm run dev   # starts HTTP :8080 and RESP :6380 by default
 # In another terminal:
-curl -X PUT 'http://localhost:8080/v1/cache/hello?ttl=2000' -H 'content-type: application/json' -d '{"value":"world"}'
-curl 'http://localhost:8080/v1/cache/hello'   # -> "world"
-sleep 2; curl -i 'http://localhost:8080/v1/cache/hello'   # -> 404 after TTL
+curl -X PUT 'http://localhost:8080/v1/cache/hello?ttl=2000' -H 'content-type: application/json' -d '{"value":"world"}' -i
+curl 'http://localhost:8080/v1/cache/hello'
 ```
 
 Build & run:
@@ -36,53 +33,67 @@ npm run bench
 
 ---
 
-## HTTP API
+## HTTP API & Metrics
 
 - `PUT /v1/cache/:key?ttl=ms`
   - Body: JSON `{ "value": any }` or raw text.
   - Headers: `content-type: application/json` for JSON, otherwise treated as string.
-  - 204 No Content on success.
-
+  - **201 Created** si la clave no existía (con `Location`), **204 No Content** si se actualiza.
 - `GET /v1/cache/:key`
-  - 200 with serialized value.
-  - Headers: `X-Cache-Hit: true|false`, `X-TTL-Remaining: <ms>` (if applicable).
-
+  - 200 con el valor serializado. Headers: `X-TTL-Remaining` si aplica.
 - `DELETE /v1/cache/:key`
-  - 204 No Content if deleted, 404 if not present.
-
+  - 204 si se eliminó, 404 si no existe.
 - `GET /v1/stats`
-  - Cache stats (items, size bytes, hits, misses, evictions, capacity, policy).
-
-- `GET /health`
-  - Basic health check.
+  - Contadores y metadatos.
+- `GET /metrics`
+  - Exposición **Prometheus** (OpenMetrics).
 
 ---
 
-## Design
+## RESP (Redis-like) TCP Adapter
+
+- Puerto: `6380` (configurable vía `RESP_PORT`).  
+- Comandos: `PING`, `GET key`, `SET key value [PX ms]`, `DEL key`, `EXISTS key`, `TTL key`, `PTTL key`, `QUIT`, `INFO`.  
+- Nota: el adaptador RESP maneja **strings**. Para JSON/binario, usa el API HTTP.
+
+---
+
+## Design highlights
 
 - **Core**
   - Storage: `Map<string, Entry>`
-  - Eviction: **LRU** via doubly‑linked list + hashmap for O(1) `get`/`set`/promote/evict.
-  - TTL: centralized **min‑heap** (binary heap) keyed by `expiresAt` with O(log n) adjusts; sweeper runs on a fixed cadence (default 100ms) popping expired keys.
-  - Capacity: byte‑based (approx) using `Buffer.byteLength` of serialized payload. Evict tail until within cap.
+  - Eviction: **LRU** (doubly-linked list + hashmap) → O(1).
+  - TTL: **min-heap** con sweeper centralizado → O(log n) para expiraciones.
+  - Capacity: por **bytes** aproximados.
+  - **TinyLFU** (opcional): política de admisión para mejorar el hit-ratio bajo churn.
 
-- **Clean boundaries**
-  - `CacheCore` has no knowledge of HTTP. Transport adapters can be added (TCP/RESP, gRPC, etc.).
-  - Observability: `/v1/stats` + counters; easy to export to Prometheus later.
+- **Boundaries limpias**
+  - `CacheCore` no conoce HTTP/RESP. Adaptadores son capas delgadas.
 
-- **Correctness & perf tradeoffs**
-  - No per-key timers (scales poorly).
-  - Single-threaded Node model—atomic per event loop tick. For multi‑core scale: run multiple workers behind a TCP/HTTP router or embed inside your app.
-  - Serialization: JSON or raw string. For binary use base64 in API (or add a content-type in future).
+- **Tradeoffs**
+  - Modelo single-thread de Node; para multi-core: varios workers detrás de un router.
+  - Serialización simple (HTTP): JSON o texto. RESP: strings.
 
 ---
 
-## Configuration
+## Configuración
 
 Env vars:
 - `PORT` (default `8080`)
+- `RESP_PORT` (default `6380`)
 - `CAPACITY_BYTES` (default `134217728` = 128 MiB)
 - `SWEEP_INTERVAL_MS` (default `100`)
+- `ENABLE_LFU` (default `1`)
+- `ENABLE_RESP` (default `1`)
+
+---
+
+## Docker
+
+```bash
+docker build -t zencache-ts .
+docker run --rm -p 8080:8080 -p 6380:6380 -e CAPACITY_BYTES=268435456 zencache-ts
+```
 
 ---
 
@@ -91,31 +102,27 @@ Env vars:
 ```
 src/
   core/
-    cache.ts           # Interfaces and CacheCore implementation
-    lru.ts             # Doubly-linked LRU list
-    ttlheap.ts         # Min-heap for TTL expiration
-    sizeof.ts          # Approx value sizing
+    cache.ts           # CacheCore (LRU + TTL + TinyLFU admission opcional)
+    lru.ts             # LRU: lista doblemente enlazada
+    ttlheap.ts         # Min-heap por expiresAt
+    sizeof.ts          # Estimador de bytes
+    tinylfu.ts         # Count-Min Sketch + aging
   server/
-    http.ts            # Minimal HTTP API (no deps)
-  main.ts              # Compose and start server
+    http.ts            # HTTP API (incluye /metrics)
+    resp.ts            # Adaptador RESP mínimo
+  main.ts              # Bootstrap (env, puertos, flags)
 scripts/
   bench.ts             # Micro benchmark
 tests/
-  cache.test.ts        # Basic correctness tests for LRU + TTL
+  cache.test.ts        # Pruebas básicas
 ```
 
 ---
 
-## Ideas to extend (time permitting)
+## Ideas para extender
 
-- Add **TinyLFU** admission in front of LRU for better hit ratios under churn.
-- **Prometheus** `/metrics` endpoint and histograms for op latency.
-- Pluggable **persistence** (AOF/snapshot) with backpressure.
-- **Sharding**: consistent hashing across workers; add replication.
-- **TCP RESP** adapter for redis‑cli compatibility (subset).
-
----
-
-## License
-
-MIT
+- TinyLFU window (W-TinyLFU) / segmented LRU.
+- Snapshot/AOF + backpressure.
+- `/metrics` con histogramas por operación.
+- Sharding y réplica (hash consistente).
+- Adaptador RESP más compatible (pipelining robusto).

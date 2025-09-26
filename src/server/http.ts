@@ -1,6 +1,7 @@
 
 import http from 'node:http';
 import { Cache } from '../core/cache.js';
+import { metrics } from '../utils/metrics.js';
 
 /** Start a minimal HTTP server exposing the cache. */
 export function startHttpServer(cache: Cache, port: number) {
@@ -11,7 +12,8 @@ export function startHttpServer(cache: Cache, port: number) {
 
       if (url.pathname === '/health') {
         res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-        res.end(JSON.stringify({ ok: true })); return;
+        res.end(JSON.stringify({ ok: true })); metrics.httpDurations.observe(Number(process.hrtime.bigint() - t0) / 1e9, { op: 'GET' });
+          return;
       }
 
       if (url.pathname === '/v1/stats') {
@@ -20,6 +22,8 @@ export function startHttpServer(cache: Cache, port: number) {
       }
 
       if (url.pathname === '/metrics') {
+        const s = cache.stats();
+        const hist = metrics.httpDurations.export() + metrics.respDurations.export();
         const s = cache.stats();
         const body =
 `# HELP zencache_hits_total Total cache hits
@@ -51,7 +55,7 @@ zencache_lfu_enabled ${s.lfuEnabled ? 1 : 0}
 zencache_up 1
 `;
         res.writeHead(200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' });
-        res.end(body); return;
+        res.end(body + hist); return;
       }
 
       // /v1/cache/:key
@@ -60,6 +64,7 @@ zencache_up 1
         if (!key) { res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: 'key required' })); return; }
 
         if (method === 'GET') {
+          const t0 = process.hrtime.bigint();
           const v = cache.get(key);
           if (v === undefined) { res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: 'not found' })); return; }
           const rem = cache.ttlRemainingMs(key);
@@ -71,6 +76,7 @@ zencache_up 1
         }
 
         if (method === 'PUT' || method === 'POST') {
+          const t0 = process.hrtime.bigint();
           const ttlMs = url.searchParams.get('ttl');
           const ttl = ttlMs ? parseInt(ttlMs, 10) : undefined;
 
@@ -91,13 +97,14 @@ zencache_up 1
           } else {
             res.writeHead(204);
           }
-          res.end(); return;
+          res.end(); metrics.httpDurations.observe(Number(process.hrtime.bigint() - t0) / 1e9, { op: 'PUT' }); return;
         }
 
         if (method === 'DELETE') {
+          const t0 = process.hrtime.bigint();
           const ok = cache.del(key);
           if (!ok) { res.writeHead(404, { 'content-type': 'application/json; charset=utf-8' }); res.end(JSON.stringify({ error: 'not found' })); return; }
-          res.writeHead(204); res.end(); return;
+          res.writeHead(204); res.end(); metrics.httpDurations.observe(Number(process.hrtime.bigint() - t0) / 1e9, { op: 'PUT' }); return;
         }
       }
 

@@ -126,3 +126,64 @@ tests/
 - `/metrics` con histogramas por operación.
 - Sharding y réplica (hash consistente).
 - Adaptador RESP más compatible (pipelining robusto).
+
+---
+
+## Why this cache?
+- **Deterministic internals**: LRU O(1) + TTL O(log n) con *single sweeper*.
+- **Admisión TinyLFU** opcional → mejor hit-ratio en workloads con churn.
+- **Byte capacity** realista, no solo conteo de items.
+- **Transport-agnostic core** + **HTTP** y **RESP** delgados.
+- **Observabilidad** lista: `/metrics` (counters + **histogramas por operación**).
+
+### ASCII map (arquitectura)
+```
++-----------------------+
+|       HTTP API        |---- GET/PUT/DEL --> Core
++-----------------------+
+|       RESP TCP        |---- PING/GET/SET --> Core
++-----------------------+
+            |
+            v
++--------------------------------------+
+|            CacheCore                 |
+|  Map<Key,Entry> + LRU + TTL Heap     |
+|  + TinyLFU (admission)               |
++--------------------------------------+
+```
+
+### Métricas (Prometheus)
+Ejemplo de salida:
+```
+# HELP zencache_http_seconds HTTP request duration in seconds
+# TYPE zencache_http_seconds histogram
+zencache_http_seconds_bucket{op="GET",le="0.005"} 4
+...
+zencache_http_seconds_bucket{op="GET",le="+Inf"} 4
+zencache_http_seconds_sum{op="GET"} 0.0032
+zencache_http_seconds_count{op="GET"} 4
+# HELP zencache_resp_seconds RESP command duration in seconds
+# TYPE zencache_resp_seconds histogram
+zencache_resp_seconds_bucket{cmd="SET",le="0.005"} 10
+...
+```
+Scrape config de ejemplo:
+```yaml
+scrape_configs:
+  - job_name: 'zencache'
+    static_configs:
+      - targets: ['localhost:8080']
+    metrics_path: /metrics
+```
+
+### RUN con .env
+```bash
+cp .env.example .env
+# (opcional editar)
+npm run dev
+```
+
+### Bench rápido
+```bash
+npm run bench
+```
